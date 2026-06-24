@@ -24,38 +24,22 @@ var adminReady = {
 };
 
 document.addEventListener('DOMContentLoaded', function () {
-    var token = sessionStorage.getItem('floria_admin');
-    if (token) {
-        if (window.adminRef) {
-            adminRef.get().then(function (docSnap) {
-                if (!docSnap.exists) {
-                    sessionStorage.removeItem('floria_admin');
-                    return;
-                }
-                var creds = docSnap.data();
-                var storedVersion = sessionStorage.getItem('floria_admin_version');
-                var dbVersion = String(creds.sessionVersion || '1');
-                if (storedVersion !== dbVersion) {
-                    sessionStorage.removeItem('floria_admin');
-                    sessionStorage.removeItem('floria_admin_version');
-                    location.reload();
-                    return;
-                }
-                document.getElementById('loginScreen').style.display = 'none';
-                document.getElementById('adminPanel').style.display = 'block';
-                initializeAdmin();
-            }).catch(function () {
-                document.getElementById('loginScreen').style.display = 'none';
-                document.getElementById('adminPanel').style.display = 'block';
-                initializeAdmin();
-            });
-        } else {
-            document.getElementById('loginScreen').style.display = 'none';
-            document.getElementById('adminPanel').style.display = 'block';
+    floriaAuth.session().then(function (user) {
+        if (user) {
+            currentUser = user;
+            showAdminPanel();
             initializeAdmin();
         }
-    }
+    });
 });
+
+var currentUser = null;
+
+function showAdminPanel() {
+    document.getElementById('loginScreen').style.display = 'none';
+    document.getElementById('adminPanel').style.display = 'block';
+    applyRolePermissions();
+}
 
 function setAdminLoading(loading) {
     var loader = document.getElementById('adminLoading');
@@ -89,53 +73,32 @@ function handleLogin(event) {
     var errorEl = document.getElementById('loginError');
     errorEl.textContent = '';
 
-    if (!window.adminRef) {
-        errorEl.textContent = 'تعذر الاتصال بقاعدة البيانات';
-        return;
-    }
-
-    adminRef.get().then(function (docSnap) {
-        if (!docSnap.exists) {
-            errorEl.textContent = 'لم يتم تهيئة بيانات الدخول';
-            return;
+    floriaAuth.login(user, pass).then(function (loggedIn) {
+        currentUser = loggedIn;
+        showAdminPanel();
+        initializeAdmin();
+    }).catch(function (err) {
+        if (err && err.status === 401) {
+            errorEl.textContent = 'اسم المستخدم أو كلمة المرور غير صحيحة';
+        } else {
+            errorEl.textContent = 'تعذر تسجيل الدخول، حاولي مرة أخرى';
         }
-        var creds = docSnap.data();
-        hashString(pass).then(function (passHash) {
-            if (user === creds.username && passHash === creds.passwordHash) {
-                var sessionToken = Date.now().toString(36) + Math.random().toString(36).substr(2);
-                var dbVersion = String(creds.sessionVersion || '1');
-                sessionStorage.setItem('floria_admin', sessionToken);
-                sessionStorage.setItem('floria_admin_version', dbVersion);
-                document.getElementById('loginScreen').style.display = 'none';
-                document.getElementById('adminPanel').style.display = 'block';
-                initializeAdmin();
-            } else {
-                errorEl.textContent = 'اسم المستخدم أو كلمة المرور غير صحيحة';
-            }
-        });
-    }).catch(function () {
-        errorEl.textContent = 'حدث خطأ أثناء التحقق من البيانات';
     });
 }
 
 function logout() {
-    sessionStorage.removeItem('floria_admin');
-    sessionStorage.removeItem('floria_admin_version');
+    floriaAuth.logout();
     unsubscribers.forEach(function (unsubscribe) { if (typeof unsubscribe === 'function') unsubscribe(); });
     location.reload();
 }
 
 function killAllSessions() {
     if (!confirm('سيتم تسجيل خروج جميع المستخدمين بما فيهم أنت. متأكد؟')) return;
-    adminRef.get().then(function (docSnap) {
-        var creds = docSnap.exists ? docSnap.data() : {};
-        var currentVersion = Number(creds.sessionVersion || 1);
-        return adminRef.update({ sessionVersion: currentVersion + 1 });
-    }).then(function () {
+    floriaAuth.killAll().then(function () {
         setAdminStatus('تم إنهاء جميع الجلسات', 'success');
         setTimeout(function () { logout(); }, 1500);
     }).catch(function () {
-        setAdminStatus('لإنهاء الجلسات، غيّر قيمة sessionVersion من Firebase Console', 'error');
+        setAdminStatus('تعذر إنهاء الجلسات حالياً', 'error');
     });
 }
 
@@ -143,10 +106,113 @@ function switchTab(tab, button) {
     document.querySelectorAll('.tab-content').forEach(function (content) { content.classList.remove('active'); });
     document.querySelectorAll('.tab-btn').forEach(function (tabButton) { tabButton.classList.remove('active'); });
     document.getElementById('tab-' + tab).classList.add('active');
-    if (button) button.classList.add('active');
+    if (button) {
+        button.classList.add('active');
+    } else {
+        var btn = document.querySelector('.tab-btn[data-tab="' + tab + '"]');
+        if (btn) btn.classList.add('active');
+    }
     if (tab === 'dashboard') renderDashboard();
     if (tab === 'orders') renderOrdersTable();
     if (tab === 'hero') renderHeroTable();
+    if (tab === 'users') loadUsers();
+}
+
+function applyRolePermissions() {
+    var isWorker = currentUser && currentUser.role === 'worker';
+    var hiddenTabs = ['dashboard', 'products', 'hero', 'settings', 'users'];
+    document.querySelectorAll('.tab-btn').forEach(function (btn) {
+        var tab = btn.getAttribute('data-tab');
+        btn.style.display = (isWorker && hiddenTabs.indexOf(tab) >= 0) ? 'none' : '';
+    });
+    var label = document.getElementById('currentUserLabel');
+    if (label && currentUser) {
+        label.textContent = currentUser.name + ' · ' + (isWorker ? 'موظف الطلبات' : 'مدير');
+    }
+    if (isWorker) switchTab('orders');
+}
+
+var usersList = [];
+
+function loadUsers() {
+    if (!currentUser || currentUser.role !== 'admin') return;
+    floriaAuth.listUsers().then(function (list) {
+        usersList = list;
+        renderUsersTable();
+    }).catch(function () {
+        setAdminStatus('تعذر تحميل قائمة الموظفين.', 'error');
+    });
+}
+
+function renderUsersTable() {
+    var tbody = document.getElementById('usersTableBody');
+    if (!tbody) return;
+    var rows = usersList.map(function (u) {
+        var roleLabel = u.role === 'worker' ? 'موظف' : 'مدير';
+        return '<tr><td>' + escapeHtml(u.username) + '</td><td>' + escapeHtml(u.name || '') + '</td><td>' + roleLabel +
+            '</td><td><button class="action-link" onclick="editUser(\'' + escapeHtml(u.username) + '\')">تعديل</button>' +
+            '<button class="action-link" onclick="resetUserPassword(\'' + escapeHtml(u.username) + '\')">إعادة تعيين</button>' +
+            '<button class="action-link" onclick="removeUser(\'' + escapeHtml(u.username) + '\')">حذف</button></td></tr>';
+    });
+    tbody.innerHTML = rows.join('') || '<tr><td colspan="4">لا يوجد موظفون.</td></tr>';
+}
+
+function saveUser(event) {
+    event.preventDefault();
+    if (!currentUser || currentUser.role !== 'admin') return;
+    var username = String(document.getElementById('userUsername').value || '').trim();
+    if (!username) return;
+    var payload = {
+        username: username,
+        name: document.getElementById('userName').value || username,
+        role: document.getElementById('userRole').value === 'worker' ? 'worker' : 'admin',
+        password: document.getElementById('userPassword').value
+    };
+    floriaAuth.saveUser(payload).then(function () {
+        document.getElementById('userUsername').value = '';
+        document.getElementById('userName').value = '';
+        document.getElementById('userPassword').value = '';
+        setAdminStatus('تم حفظ الموظف.', 'success');
+        loadUsers();
+    }).catch(function (err) {
+        setAdminStatus((err && err.message) ? err.message : 'تعذر حفظ الموظف.', 'error');
+    });
+}
+
+function editUser(username) {
+    var u = null;
+    for (var i = 0; i < usersList.length; i++) { if (usersList[i].username === username) { u = usersList[i]; break; } }
+    if (!u) return;
+    document.getElementById('userUsername').value = u.username;
+    document.getElementById('userName').value = u.name || '';
+    document.getElementById('userPassword').value = '';
+    document.getElementById('userRole').value = u.role || 'admin';
+}
+
+function removeUser(username) {
+    if (!currentUser || currentUser.role !== 'admin') return;
+    if (username === currentUser.username) { alert('لا يمكنك حذف حسابك الحالي.'); return; }
+    if (!confirm('حذف الموظف ' + username + '؟')) return;
+    floriaAuth.deleteUser(username).then(function () {
+        setAdminStatus('تم حذف الموظف.', 'success');
+        loadUsers();
+    }).catch(function (err) {
+        setAdminStatus((err && err.message) ? err.message : 'تعذر حذف الموظف.', 'error');
+    });
+}
+
+function resetUserPassword(username) {
+    if (!currentUser || currentUser.role !== 'admin') return;
+    var u = null;
+    for (var i = 0; i < usersList.length; i++) { if (usersList[i].username === username) { u = usersList[i]; break; } }
+    if (!u) return;
+    var password = prompt('كلمة المرور الجديدة للمستخدم ' + username, '5555');
+    if (password == null) return;
+    floriaAuth.saveUser({ username: username, name: u.name, role: u.role, password: String(password || '5555') }).then(function () {
+        setAdminStatus('تم تحديث كلمة المرور.', 'success');
+    }).catch(function () {
+        setAdminStatus('تعذر تحديث كلمة المرور.', 'error');
+    });
 }
 
 async function initializeAdmin() {

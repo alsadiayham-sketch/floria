@@ -1,1 +1,4 @@
 .wrangler/
+
+# local secrets
+floria_auth_secret.txt
