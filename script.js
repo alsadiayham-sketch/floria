@@ -976,9 +976,9 @@ function renderHeroSlider(slides) {
     var html = slides.map(function(slide, idx) {
         var media = '';
         if (slide.type === 'video') {
-            media = '<video src="' + slide.url + '" muted playsinline' + (idx === 0 ? ' autoplay' : '') + ' style="width:100%;height:75vh;object-fit:cover;" onended="goHeroSlide(' + ((idx + 1) % slides.length) + ')"></video>';
+            media = '<video src="' + slide.url + '" muted playsinline' + (idx === 0 ? ' autoplay' : '') + ' style="width:100%;height:100%;object-fit:cover;" onended="goHeroSlide(' + ((idx + 1) % slides.length) + ')"></video>';
         } else {
-            media = '<img src="' + slide.url + '" alt="' + (slide.title || '') + '" style="width:100%;height:75vh;object-fit:cover;">';
+            media = '<img src="' + slide.url + '" alt="' + (slide.title || '') + '" style="width:100%;height:100%;object-fit:cover;">';
         }
         return '<div class="hero-slide' + (idx === 0 ? ' active' : '') + '">' + media +
             '<div class="hero-overlay"><div class="hero-content">' +
